@@ -5,6 +5,7 @@ import com.lending.product.port.in.CreateProductUseCase;
 import com.lending.product.port.in.GetProductUseCase;
 import com.lending.product.port.in.UpdateProductUseCase;
 import jakarta.validation.Valid;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -38,7 +39,7 @@ public class ProductController {
 
     @GetMapping
     public ResponseEntity<Page<ProductResponse>> listProducts(
-            @PageableDefault(size = 20, sort = "createdAt") Pageable pageable) {
+            @ParameterObject @PageableDefault(size = 20, sort = "createdAt") Pageable pageable) {
         Page<ProductResponse> products = getProductUseCase.listProducts(pageable)
                 .map(ProductResponse::from);
         return ResponseEntity.ok(products);

@@ -6,6 +6,7 @@ import com.lending.servicing.adapter.in.web.LoanAccountResponse;
 import com.lending.servicing.domain.model.LoanAccount;
 import com.lending.servicing.domain.service.LoanServicingService;
 import jakarta.validation.Valid;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -36,7 +37,7 @@ public class CustomerController {
 
     @GetMapping
     public ResponseEntity<Page<CustomerResponse>> listCustomers(
-            @PageableDefault(size = 20, sort = "createdAt") Pageable pageable) {
+            @ParameterObject @PageableDefault(size = 20, sort = "createdAt") Pageable pageable) {
         Page<CustomerResponse> customers = customerService.listCustomers(pageable)
                 .map(CustomerResponse::from);
         return ResponseEntity.ok(customers);

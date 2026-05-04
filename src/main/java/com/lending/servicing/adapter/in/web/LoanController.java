@@ -11,6 +11,7 @@ import com.lending.servicing.port.out.LoanAccountRepository;
 import com.lending.servicing.port.out.RepaymentRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -45,7 +46,7 @@ public class LoanController {
 
     @GetMapping
     public ResponseEntity<Page<LoanAccountResponse>> listLoans(
-            @PageableDefault(size = 20) Pageable pageable) {
+            @ParameterObject @PageableDefault(size = 20) Pageable pageable) {
         Page<LoanAccountResponse> loans = loanAccountRepository.findAll(pageable)
                 .map(LoanAccountResponse::from);
         return ResponseEntity.ok(loans);
