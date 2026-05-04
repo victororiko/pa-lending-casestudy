@@ -1,0 +1,1149 @@
+openapi: 3.1.0
+info:
+  title: Lending Platform API
+  description: |
+    REST API for a simplified lending platform backend.
+    See [API Design doc](03-api-and-schema.md) for full context.
+  version: 0.1.0
+  contact:
+    name: Engineering Lead
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development
+
+tags:
+  - name: Products
+    description: Loan product configuration
+  - name: Customers
+    description: Customer management
+  - name: Applications
+    description: Loan application origination
+  - name: Loans
+    description: Loan account servicing
+  - name: Repayments
+    description: Repayment recording
+
+# ---------------------------------------------------------------------------
+# Reusable components
+# ---------------------------------------------------------------------------
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-generated UUID ensuring at-most-once execution.
+      schema:
+        type: string
+        format: uuid
+        example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+    XUserId:
+      name: X-User-Id
+      in: header
+      required: false
+      description: Stub user identifier for audit trail.
+      schema:
+        type: string
+        example: "admin-001"
+    PageParam:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        default: 0
+    SizeParam:
+      name: size
+      in: query
+      required: false
+      schema:
+        type: integer
+        default: 20
+    SortParam:
+      name: sort
+      in: query
+      required: false
+      schema:
+        type: string
+        example: "createdAt,desc"
+
+  schemas:
+    # ---- Value Objects ----
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          description: Decimal value with up to 4 decimal places.
+          example: "10000.0000"
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+          description: ISO 4217 currency code.
+          example: "USD"
+
+    FeeDefinition:
+      type: object
+      required: [feeType, calculationMethod, amount]
+      properties:
+        feeType:
+          type: string
+          enum: [ORIGINATION_FEE, LATE_PAYMENT_FEE, PREPAYMENT_PENALTY]
+        calculationMethod:
+          type: string
+          enum: [FLAT, PERCENTAGE_OF_PRINCIPAL, PERCENTAGE_OF_OUTSTANDING]
+        amount:
+          $ref: '#/components/schemas/Money'
+
+    # ---- Products ----
+    CreateProductRequest:
+      type: object
+      required: [name, interestRatePerAnnum, minTenureMonths, maxTenureMonths, minPrincipal, maxPrincipal, repaymentFrequency]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        interestRatePerAnnum:
+          type: string
+          description: Annual percentage rate.
+          example: "12.50"
+        interestAccrualMethod:
+          type: string
+          enum: [PRE_COMPUTED, DAILY_ACCRUAL]
+          default: PRE_COMPUTED
+          description: How interest is calculated. v1 only implements PRE_COMPUTED.
+        minTenureMonths:
+          type: integer
+          minimum: 1
+        maxTenureMonths:
+          type: integer
+          minimum: 1
+        minPrincipal:
+          $ref: '#/components/schemas/Money'
+        maxPrincipal:
+          $ref: '#/components/schemas/Money'
+        repaymentFrequency:
+          type: string
+          enum: [MONTHLY, BI_WEEKLY, WEEKLY]
+        gracePeriodDays:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Days after due date before overdue classification.
+        originationFeeChargeMethod:
+          type: string
+          enum: [DEDUCTED_FROM_DISBURSEMENT, ADDED_TO_BALANCE]
+          default: DEDUCTED_FROM_DISBURSEMENT
+          description: How the origination fee is applied at disbursement.
+        allowEarlyRepayment:
+          type: boolean
+          default: true
+          description: Whether the borrower can pay off the loan before maturity.
+        overpaymentPolicy:
+          type: string
+          enum: [REJECT, APPLY_TO_NEXT_INSTALLMENT, HOLD_AS_CREDIT]
+          default: REJECT
+          description: What happens when a repayment exceeds the outstanding balance.
+        feeSchedule:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeeDefinition'
+
+    UpdateProductRequest:
+      $ref: '#/components/schemas/CreateProductRequest'
+
+    ProductResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        interestRatePerAnnum:
+          type: string
+        interestAccrualMethod:
+          type: string
+          enum: [PRE_COMPUTED, DAILY_ACCRUAL]
+        minTenureMonths:
+          type: integer
+        maxTenureMonths:
+          type: integer
+        minPrincipal:
+          $ref: '#/components/schemas/Money'
+        maxPrincipal:
+          $ref: '#/components/schemas/Money'
+        repaymentFrequency:
+          type: string
+          enum: [MONTHLY, BI_WEEKLY, WEEKLY]
+        gracePeriodDays:
+          type: integer
+        originationFeeChargeMethod:
+          type: string
+          enum: [DEDUCTED_FROM_DISBURSEMENT, ADDED_TO_BALANCE]
+        allowEarlyRepayment:
+          type: boolean
+        overpaymentPolicy:
+          type: string
+          enum: [REJECT, APPLY_TO_NEXT_INSTALLMENT, HOLD_AS_CREDIT]
+        feeSchedule:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeeDefinition'
+        active:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int64
+
+    # ---- Customers ----
+    CreateCustomerRequest:
+      type: object
+      required: [firstName, lastName, email, phoneNumber, nationalId, creditLimit]
+      properties:
+        firstName:
+          type: string
+          maxLength: 100
+        lastName:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        phoneNumber:
+          type: string
+          description: E.164 format
+          example: "+12025551234"
+        nationalId:
+          type: string
+          maxLength: 50
+        creditLimit:
+          $ref: '#/components/schemas/Money'
+        maxActiveLoans:
+          type: integer
+          minimum: 1
+          default: 3
+
+    UpdateCustomerRequest:
+      type: object
+      properties:
+        firstName:
+          type: string
+          maxLength: 100
+        lastName:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        phoneNumber:
+          type: string
+        creditLimit:
+          $ref: '#/components/schemas/Money'
+        maxActiveLoans:
+          type: integer
+          minimum: 1
+
+    CustomerResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+        phoneNumber:
+          type: string
+        nationalId:
+          type: string
+        creditLimit:
+          $ref: '#/components/schemas/Money'
+        maxActiveLoans:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int64
+
+    # ---- Loan Applications ----
+    SubmitApplicationRequest:
+      type: object
+      required: [customerId, productId, requestedPrincipal, requestedTenureMonths]
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        productId:
+          type: string
+          format: uuid
+        requestedPrincipal:
+          $ref: '#/components/schemas/Money'
+        requestedTenureMonths:
+          type: integer
+          minimum: 1
+
+    RejectApplicationRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+
+    ApplicationResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        customerId:
+          type: string
+          format: uuid
+        productId:
+          type: string
+          format: uuid
+        requestedPrincipal:
+          $ref: '#/components/schemas/Money'
+        requestedTenureMonths:
+          type: integer
+        status:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED]
+        rejectionReason:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int64
+
+    # ---- Loan Accounts ----
+    LoanAccountResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        applicationId:
+          type: string
+          format: uuid
+        customerId:
+          type: string
+          format: uuid
+        productId:
+          type: string
+          format: uuid
+        principal:
+          $ref: '#/components/schemas/Money'
+        interestRatePerAnnum:
+          type: string
+        interestAccrualMethod:
+          type: string
+          enum: [PRE_COMPUTED, DAILY_ACCRUAL]
+        tenureMonths:
+          type: integer
+        repaymentFrequency:
+          type: string
+          enum: [MONTHLY, BI_WEEKLY, WEEKLY]
+        gracePeriodDays:
+          type: integer
+        originationFeeChargeMethod:
+          type: string
+          enum: [DEDUCTED_FROM_DISBURSEMENT, ADDED_TO_BALANCE]
+        allowEarlyRepayment:
+          type: boolean
+        overpaymentPolicy:
+          type: string
+          enum: [REJECT, APPLY_TO_NEXT_INSTALLMENT, HOLD_AS_CREDIT]
+        originationFee:
+          $ref: '#/components/schemas/Money'
+        outstandingBalance:
+          $ref: '#/components/schemas/Money'
+        creditBalance:
+          $ref: '#/components/schemas/Money'
+          description: Surplus held under HOLD_AS_CREDIT overpayment policy.
+        state:
+          type: string
+          enum: [PENDING_DISBURSEMENT, ACTIVE, OVERDUE, DEFAULTED, WRITTEN_OFF, CLOSED]
+        disbursedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+        nextInstallmentDueDate:
+          type: string
+          format: date
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int64
+
+    InstallmentResponse:
+      type: object
+      properties:
+        installmentNumber:
+          type: integer
+        dueDate:
+          type: string
+          format: date
+        principalDue:
+          $ref: '#/components/schemas/Money'
+        interestDue:
+          $ref: '#/components/schemas/Money'
+        totalDue:
+          $ref: '#/components/schemas/Money'
+        principalPaid:
+          $ref: '#/components/schemas/Money'
+        interestPaid:
+          $ref: '#/components/schemas/Money'
+        totalPaid:
+          $ref: '#/components/schemas/Money'
+        status:
+          type: string
+          enum: [PENDING, PARTIALLY_PAID, PAID, OVERDUE]
+
+    ScheduleResponse:
+      type: object
+      properties:
+        loanAccountId:
+          type: string
+          format: uuid
+        installments:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstallmentResponse'
+
+    # ---- Repayments ----
+    RecordRepaymentRequest:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+
+    RepaymentAllocation:
+      type: object
+      properties:
+        installmentNumber:
+          type: integer
+        principalAllocated:
+          $ref: '#/components/schemas/Money'
+        interestAllocated:
+          $ref: '#/components/schemas/Money'
+
+    RepaymentResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        loanAccountId:
+          type: string
+          format: uuid
+        amount:
+          $ref: '#/components/schemas/Money'
+        receivedAt:
+          type: string
+          format: date-time
+        allocations:
+          type: array
+          items:
+            $ref: '#/components/schemas/RepaymentAllocation'
+        remainingBalance:
+          $ref: '#/components/schemas/Money'
+        loanState:
+          type: string
+          enum: [ACTIVE, OVERDUE, CLOSED]
+        createdAt:
+          type: string
+          format: date-time
+
+    # ---- Ledger ----
+    LedgerEntryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        loanAccountId:
+          type: string
+          format: uuid
+        entryType:
+          type: string
+          enum: [DISBURSEMENT, REPAYMENT_PRINCIPAL, REPAYMENT_INTEREST, FEE_CHARGE, FEE_PAYMENT, WRITE_OFF]
+        amount:
+          $ref: '#/components/schemas/Money'
+        direction:
+          type: string
+          enum: [DEBIT, CREDIT]
+        description:
+          type: string
+        referenceId:
+          type: string
+          format: uuid
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    # ---- Errors ----
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        code:
+          type: string
+          description: Machine-readable error code.
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+        path:
+          type: string
+        traceId:
+          type: string
+
+    # ---- Pagination wrapper ----
+    PageMetadata:
+      type: object
+      properties:
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+  responses:
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    BadRequest:
+      description: Validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Conflict — duplicate key, optimistic lock failure, or invalid state transition.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnprocessableEntity:
+      description: Business rule violation (e.g., eligibility failure).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+  # ---- Products ----
+  /products:
+    post:
+      tags: [Products]
+      summary: Create a loan product
+      operationId: createProduct
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/XUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProductRequest'
+      responses:
+        '201':
+          description: Product created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    get:
+      tags: [Products]
+      summary: List active loan products
+      operationId: listProducts
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - $ref: '#/components/parameters/SortParam'
+      responses:
+        '200':
+          description: Paginated list of products.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProductResponse'
+                  page:
+                    $ref: '#/components/schemas/PageMetadata'
+
+  /products/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Products]
+      summary: Get a loan product by ID
+      operationId: getProduct
+      responses:
+        '200':
+          description: Product details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Products]
+      summary: Update a loan product
+      operationId: updateProduct
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/XUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProductRequest'
+      responses:
+        '200':
+          description: Product updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Products]
+      summary: Soft-delete a loan product
+      operationId: deleteProduct
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/XUserId'
+      responses:
+        '204':
+          description: Product deleted.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---- Customers ----
+  /customers:
+    post:
+      tags: [Customers]
+      summary: Create a customer
+      operationId: createCustomer
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/XUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCustomerRequest'
+      responses:
+        '201':
+          description: Customer created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    get:
+      tags: [Customers]
+      summary: List customers
+      operationId: listCustomers
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - $ref: '#/components/parameters/SortParam'
+      responses:
+        '200':
+          description: Paginated list of customers.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CustomerResponse'
+                  page:
+                    $ref: '#/components/schemas/PageMetadata'
+
+  /customers/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Customers]
+      summary: Get a customer by ID
+      operationId: getCustomer
+      responses:
+        '200':
+          description: Customer details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Customers]
+      summary: Update a customer
+      operationId: updateCustomer
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/XUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCustomerRequest'
+      responses:
+        '200':
+          description: Customer updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /customers/{id}/loans:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Customers]
+      summary: List loan accounts for a customer
+      operationId: listCustomerLoans
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: Paginated list of loan accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LoanAccountResponse'
+                  page:
+                    $ref: '#/components/schemas/PageMetadata'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---- Loan Applications ----
+  /loans/applications:
+    post:
+      tags: [Applications]
+      summary: Submit a loan application
+      operationId: submitApplication
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/XUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitApplicationRequest'
+      responses:
+        '201':
+          description: Application submitted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /loans/applications/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Applications]
+      summary: Get application status
+      operationId: getApplication
+      responses:
+        '200':
+          description: Application details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /loans/applications/{id}/approve:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Applications]
+      summary: Approve a loan application
+      operationId: approveApplication
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/XUserId'
+      responses:
+        '200':
+          description: Application approved. LoanAccount created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+
+  /loans/applications/{id}/reject:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Applications]
+      summary: Reject a loan application
+      operationId: rejectApplication
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/XUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectApplicationRequest'
+      responses:
+        '200':
+          description: Application rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  # ---- Loan Accounts ----
+  /loans:
+    get:
+      tags: [Loans]
+      summary: List loan accounts
+      operationId: listLoans
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - $ref: '#/components/parameters/SortParam'
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [PENDING_DISBURSEMENT, ACTIVE, OVERDUE, DEFAULTED, WRITTEN_OFF, CLOSED]
+        - name: customerId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Paginated list of loan accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LoanAccountResponse'
+                  page:
+                    $ref: '#/components/schemas/PageMetadata'
+
+  /loans/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Loans]
+      summary: Get loan account details
+      operationId: getLoan
+      responses:
+        '200':
+          description: Loan account details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanAccountResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /loans/{id}/disburse:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Loans]
+      summary: Disburse the loan
+      operationId: disburseLoan
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/XUserId'
+      responses:
+        '200':
+          description: Loan disbursed and active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanAccountResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /loans/{id}/schedule:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Loans]
+      summary: Get amortisation schedule
+      operationId: getLoanSchedule
+      responses:
+        '200':
+          description: Full amortisation schedule.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /loans/{id}/ledger:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Loans]
+      summary: Get ledger entries for a loan
+      operationId: getLoanLedger
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: Paginated ledger entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LedgerEntryResponse'
+                  page:
+                    $ref: '#/components/schemas/PageMetadata'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---- Repayments ----
+  /loans/{loanId}/repayments:
+    parameters:
+      - name: loanId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Repayments]
+      summary: Record a repayment
+      operationId: recordRepayment
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/XUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordRepaymentRequest'
+      responses:
+        '201':
+          description: Repayment recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepaymentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+    get:
+      tags: [Repayments]
+      summary: List repayments for a loan
+      operationId: listRepayments
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: Paginated list of repayments.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RepaymentResponse'
+                  page:
+                    $ref: '#/components/schemas/PageMetadata'
+        '404':
+          $ref: '#/components/responses/NotFound'
