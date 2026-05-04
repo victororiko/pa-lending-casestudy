@@ -1,23 +1,26 @@
 package com.lending.shared.infrastructure;
 
 import org.springframework.stereotype.Component;
-import org.springframework.web.context.annotation.RequestScope;
 
 /**
  * Holds the user identity for the current request, populated from the X-User-Id header.
  * Falls back to "system" if the header is not provided.
+ * Uses ThreadLocal to work correctly in servlet filters (before DispatcherServlet).
  */
 @Component
-@RequestScope
 public class UserContext {
 
-    private String userId = "system";
+    private static final ThreadLocal<String> currentUser = ThreadLocal.withInitial(() -> "system");
 
     public String getUserId() {
-        return userId;
+        return currentUser.get();
     }
 
     public void setUserId(String userId) {
-        this.userId = userId != null && !userId.isBlank() ? userId : "system";
+        currentUser.set(userId != null && !userId.isBlank() ? userId : "system");
+    }
+
+    public void clear() {
+        currentUser.remove();
     }
 }

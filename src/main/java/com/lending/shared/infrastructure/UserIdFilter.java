@@ -33,8 +33,12 @@ public class UserIdFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain)
             throws ServletException, IOException {
-        String userId = request.getHeader(USER_ID_HEADER);
-        userContext.setUserId(userId);
-        filterChain.doFilter(request, response);
+        try {
+            String userId = request.getHeader(USER_ID_HEADER);
+            userContext.setUserId(userId);
+            filterChain.doFilter(request, response);
+        } finally {
+            userContext.clear();
+        }
     }
 }

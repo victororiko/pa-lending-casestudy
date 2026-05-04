@@ -7,7 +7,7 @@ import com.lending.shared.domain.Money;
 public class EligibilityValidator {
 
     public record EligibilityResult(boolean eligible, String rejectionReason) {
-        public static EligibilityResult eligible() {
+        public static EligibilityResult approve() {
             return new EligibilityResult(true, null);
         }
 
@@ -63,6 +63,6 @@ public class EligibilityValidator {
                     customer.getMaxActiveLoans() + ").");
         }
 
-        return EligibilityResult.eligible();
+        return EligibilityResult.approve();
     }
 }
